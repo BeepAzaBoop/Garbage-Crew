@@ -44,31 +44,92 @@ class BluetoothGarbageSortController:
             
         print("Scanning for EV3 devices...")
         try:
-            nearby_devices = bluetooth.discover_devices(lookup_names=True, duration=10)
+            # Try different discovery methods
+            nearby_devices = []
             
+            # Method 1: Try standard bluetooth.discover_devices
+            try:
+                nearby_devices = bluetooth.discover_devices(lookup_names=True, duration=10)
+                print(f"Found {len(nearby_devices)} devices using standard discovery")
+            except AttributeError:
+                print("Standard discovery not available, trying alternative methods...")
+                
+            # Method 2: If standard discovery fails, try without lookup_names
+            if not nearby_devices:
+                try:
+                    device_addresses = bluetooth.discover_devices(duration=10)
+                    nearby_devices = [(addr, f"Device-{addr[-5:]}") for addr in device_addresses]
+                    print(f"Found {len(nearby_devices)} devices using basic discovery")
+                except:
+                    pass
+            
+            # Method 3: Try using bluetoothctl command as fallback
+            if not nearby_devices:
+                try:
+                    import subprocess
+                    print("Trying bluetoothctl discovery...")
+                    
+                    # Start scan
+                    subprocess.run(['bluetoothctl', 'scan', 'on'], timeout=2)
+                    time.sleep(5)  # Wait for devices to be discovered
+                    
+                    # Get devices
+                    result = subprocess.run(['bluetoothctl', 'devices'], 
+                                          capture_output=True, text=True, timeout=5)
+                    
+                    for line in result.stdout.split('\n'):
+                        if 'Device' in line:
+                            parts = line.split()
+                            if len(parts) >= 3:
+                                addr = parts[1]
+                                name = ' '.join(parts[2:])
+                                nearby_devices.append((addr, name))
+                    
+                    # Stop scan
+                    subprocess.run(['bluetoothctl', 'scan', 'off'], timeout=2)
+                    print(f"Found {len(nearby_devices)} devices using bluetoothctl")
+                    
+                except Exception as e:
+                    print(f"Bluetoothctl discovery failed: {e}")
+            
+            # Filter for EV3 devices
             ev3_devices = []
+            print("\nFound devices:")
             for addr, name in nearby_devices:
+                print(f"  {name} - {addr}")
                 if "ev3" in name.lower() or "lego" in name.lower():
                     ev3_devices.append((addr, name))
-                    print(f"Found EV3: {name} - {addr}")
             
             if not ev3_devices:
-                print("No EV3 devices found")
+                print("\n❌ No EV3 devices found")
+                print("Try manually entering the EV3 MAC address...")
+                manual_addr = input("Enter EV3 MAC address (or press Enter to skip): ").strip()
+                if manual_addr:
+                    return manual_addr
                 return None
             
             if len(ev3_devices) == 1:
+                print(f"✅ Found EV3: {ev3_devices[0][1]} - {ev3_devices[0][0]}")
                 return ev3_devices[0][0]
             else:
-                print("Multiple EV3 devices found:")
+                print(f"\n✅ Found {len(ev3_devices)} EV3 devices:")
                 for i, (addr, name) in enumerate(ev3_devices):
-                    print(f"{i}: {name} - {addr}")
+                    print(f"  {i+1}. {name} - {addr}")
                 try:
-                    choice = int(input("Select device (number): "))
-                    return ev3_devices[choice][0]
+                    choice = int(input("Select device (number): ")) - 1
+                    if 0 <= choice < len(ev3_devices):
+                        return ev3_devices[choice][0]
+                    else:
+                        return ev3_devices[0][0]
                 except (ValueError, IndexError):
                     return ev3_devices[0][0]
+                    
         except Exception as e:
             print(f"Discovery failed: {e}")
+            print("Try manually entering the EV3 MAC address...")
+            manual_addr = input("Enter EV3 MAC address (or press Enter to skip): ").strip()
+            if manual_addr:
+                return manual_addr
             return None
     
     def connect(self):
@@ -78,13 +139,18 @@ class BluetoothGarbageSortController:
             return False
             
         if not self.ev3_address:
+            print("No saved EV3 address found. Trying discovery...")
             self.ev3_address = self.discover_ev3()
             if not self.ev3_address:
-                print("No EV3 address available")
+                print("❌ No EV3 address available")
+                print("💡 You can manually set the address by creating ev3_config.txt with:")
+                print("   EV3_ADDRESS=XX:XX:XX:XX:XX:XX")
                 return False
         
         try:
             self.socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+            self.socket.settimeout(15)  # 15 second timeout
+            
             print(f"Connecting to EV3 at {self.ev3_address}...")
             self.socket.connect((self.ev3_address, self.port))
             self.connected = True
@@ -94,17 +160,37 @@ class BluetoothGarbageSortController:
             response = self._send_command("ping")
             if response and response.get("status") == "success":
                 print("✓ EV3 motor server is responding")
+                
+                # Save working address for future use
+                self.save_working_address()
                 return True
             else:
                 print("✗ EV3 motor server not responding properly")
+                print("💡 Make sure EV3 is running: python3 ev3_bluetooth_server.py")
                 return False
                 
         except Exception as e:
             print(f"✗ Connection failed: {e}")
+            print("💡 Troubleshooting tips:")
+            print("   1. Make sure EV3 Bluetooth is enabled and discoverable")
+            print("   2. Make sure EV3 is running ev3_bluetooth_server.py")
+            print("   3. Try pairing devices first: bluetoothctl")
+            print("   4. Check if MAC address is correct")
+            
             if self.socket:
                 self.socket.close()
             self.connected = False
             return False
+    
+    def save_working_address(self):
+        """Save working EV3 address for future use"""
+        try:
+            with open("ev3_config.txt", "w") as f:
+                f.write(f"EV3_ADDRESS={self.ev3_address}\n")
+                f.write(f"# This file was auto-generated\n")
+            print(f"✅ Saved working EV3 address: {self.ev3_address}")
+        except Exception as e:
+            print(f"⚠️  Could not save address: {e}")
     
     def _send_command(self, action, **kwargs):
         """Send command to EV3 and get response"""
