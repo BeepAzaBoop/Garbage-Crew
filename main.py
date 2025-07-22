@@ -6,6 +6,24 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
+import os
+
+# Import motor control system
+try:
+    # Try Bluetooth motor control first (for Raspberry Pi to EV3 communication)
+    from motor_control_bluetooth import garbage_sort_controller
+    MOTOR_CONTROL_AVAILABLE = True
+    print("Bluetooth motor control system loaded successfully")
+except ImportError:
+    try:
+        # Fallback to direct motor control (if running directly on EV3)
+        from motor_control import garbage_sort_controller
+        MOTOR_CONTROL_AVAILABLE = True
+        print("Direct motor control system loaded successfully")
+    except ImportError:
+        print("Warning: Motor control not available. Running in simulation mode.")
+        MOTOR_CONTROL_AVAILABLE = False
+        garbage_sort_controller = None
 
 print(torch.__version__)
 
@@ -40,29 +58,32 @@ CLASSES = [
     "trash",
 ]
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.backends.quantized.engine = "qnnpack"
+torch.set_num_threads(2)
 
 if use_quantized:
-    # torch.backends.quantized.engine = "qnnpack"
-    torch.set_num_threads(2)
-
     if use_pretrained:
         model = models.quantization.mobilenet_v3_large(quantize=True, weights="DEFAULT")
+        # model.load_state_dict(torch.load("/home/bharathreddy/Downloads/Garbage-Crew/models/mobilenetv3_garbage_classifier_quantized_weights.pt"))
         model.classifier[3] = nn.quantized.Linear(1280, len(CLASSES))
         model = torch.jit.script(model)
     else:
-        model = torch.jit.load("./models/quantized_mobilejit.pt", map_location="cpu")
+        model = torch.jit.load("./models/mobilenetv3_quantized_scripted.pt", map_location="cpu")
+
 else:
     if use_pretrained:
         model = models.mobilenet_v3_large(weights="DEFAULT")
         model.classifier[3] = nn.Linear(1280, len(CLASSES))
     else:
         model = torch.load(
-            "./models/mobilenetv3_garbage_classifier_full.pt",
+            "./models/mobilenetv3_garbage_classifier.pt",
             map_location=DEVICE,
             weights_only=False,
         )
     model = torch.jit.script(model)
-    model.to(DEVICE)
+        
+model = torch.jit.optimize_for_inference(model)
+model.to(DEVICE)
 model.eval()
 
 # Optional YOLO import and model load
@@ -73,21 +94,35 @@ if use_yolo:
     yolo_model = YOLO(
         "./models/yolo11n.pt"
     )  # latest YOLOv11 model, pretty much same latency as yolov8 but more accurate
+    yolo_model.export(format="torchscript", imgsz=224, device="cpu")
 
 # Preprocessing
-preprocess = transforms.Compose(
-    [
-        transforms.ToPILImage(),
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
+# preprocess = transforms.Compose(
+    # [
+        # transforms.ToPILImage(),
+        # transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        # transforms.ToTensor(),
+        # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    # ]
+# )
+
+def preprocess_cv2(image_bgr):
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    image_resized = cv2.resize(image_rgb, (224, 224))
+    image_tensor = torch.from_numpy(image_resized).float() / 255.0
+    image_tensor = image_tensor.permute(2, 0, 1)  # HWC to CHW
+    image_tensor = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )(image_tensor)
+    return image_tensor.unsqueeze(0)
+
 
 # Webcam setup
-cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, IMG_SIZE)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, IMG_SIZE)
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 600)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 36)
 
 if not cap.isOpened():
@@ -105,6 +140,10 @@ with torch.no_grad():
     last_fps_time = time.time()
     fps = 0.0
 
+    motion_detected = False
+    prev_gray = None
+    motion_threshold = 500000
+
     boxes = np.empty((0, 4))
     results = None
 
@@ -114,12 +153,36 @@ with torch.no_grad():
             ret, frame = cap.read()
             if not ret:
                 break
-            display_frame = frame.copy()
+            display_frame = frame
+
+            # Motion detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if prev_gray is None:
+                prev_gray = gray
+                continue
+
+            diff_frame = cv2.absdiff(prev_gray, gray)
+            prev_gray = gray
+
+            motion_score = np.sum(diff_frame)
+            motion_detected = motion_score > motion_threshold
+
+            cv2.putText(
+                display_frame,
+                f"Motion: {'Yes' if motion_detected else 'No'}",
+                (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 255),
+                2,
+            )
+
+
         else:
             display_frame = freeze_frame.copy()
 
         # Only run detection/classification if frozen (snapshot taken), or if not in snapshot mode
-        if not snapshot_mode or frozen:
+        if motion_detected and (not snapshot_mode or frozen):
             if use_yolo:
                 if frame_count % 3 == 0:
                     results = yolo_model(display_frame, imgsz=480)[0]
@@ -132,10 +195,17 @@ with torch.no_grad():
                     if obj_crop.size == 0:
                         continue
 
-                    input_tensor = preprocess(obj_crop).unsqueeze(0).to(DEVICE)
+                    input_tensor = preprocess_cv2(obj_crop).to(DEVICE)
                     outputs = model(input_tensor)
                     pred = torch.argmax(outputs, 1).item()
                     label = CLASSES[pred]
+
+                    if label == "compost":
+                        os.system("ssh robot@ev3dev.local 'python3 /home/robot/compost_action.py'")
+                    elif label == "recycling":
+                        os.system("ssh robot@ev3dev.local 'python3 /home/robot/recycling_action.py'")
+                    elif label == "trash":
+                        os.system("ssh robot@ev3dev.local 'python3 /home/robot/trash_action.py'")
 
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(
@@ -148,13 +218,7 @@ with torch.no_grad():
                         2,
                     )
             else:
-                h, w, _ = display_frame.shape
-                min_dim = min(h, w)
-                start_x, start_y = (w - min_dim) // 2, (h - min_dim) // 2
-                cropped = display_frame[
-                    start_y : start_y + min_dim, start_x : start_x + min_dim
-                ]
-                input_tensor = preprocess(cropped).unsqueeze(0).to(DEVICE)
+                input_tensor = preprocess_cv2(display_frame).to(DEVICE)
                 outputs = model(input_tensor)
                 pred = torch.argmax(outputs, 1).item()
                 label = CLASSES[pred]
@@ -187,10 +251,11 @@ with torch.no_grad():
             (255, 255, 0),
             2,
         )
-
+        
+        # display_large = cv2.resize(display_frame, (600, 480))  # or any size you want
         cv2.imshow("Garbage Classifier", display_frame)
 
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(1)
 
         if snapshot_mode:
             if key == ord("s") and not frozen:
