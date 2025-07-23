@@ -1,6 +1,7 @@
 import argparse
 import time
-
+import servo_motor
+from servo_motor import sort_to_compost, sort_to_recyclable, sort_to_trash
 import cv2
 import numpy as np
 import torch
@@ -8,22 +9,6 @@ import torch.nn as nn
 from torchvision import models, transforms
 import os
 
-# Import motor control system
-try:
-    # Try Bluetooth motor control first (for Raspberry Pi to EV3 communication)
-    from motor_control_bluetooth import garbage_sort_controller
-    MOTOR_CONTROL_AVAILABLE = True
-    print("Bluetooth motor control system loaded successfully")
-except ImportError:
-    try:
-        # Fallback to direct motor control (if running directly on EV3)
-        from motor_control import garbage_sort_controller
-        MOTOR_CONTROL_AVAILABLE = True
-        print("Direct motor control system loaded successfully")
-    except ImportError:
-        print("Warning: Motor control not available. Running in simulation mode.")
-        MOTOR_CONTROL_AVAILABLE = False
-        garbage_sort_controller = None
 
 print(torch.__version__)
 
@@ -57,6 +42,19 @@ CLASSES = [
     "textiles",
     "trash",
 ]
+
+# Mapping of 8 detailed classes to 3 main categories
+CLASS_TO_CATEGORY = {
+    "battery": "trash",          # Special waste - goes to trash
+    "glass": "recyclable",       # Glass is recyclable
+    "metal": "recyclable",       # Metal is recyclable
+    "organic_waste": "compost",  # Organic waste goes to compost
+    "paper_cardboard": "recyclable",  # Paper/cardboard is recyclable
+    "plastic": "recyclable",     # Plastic is recyclable
+    "textiles": "trash",         # Textiles typically go to trash
+    "trash": "trash",            # Trash goes to trash
+}
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.backends.quantized.engine = "qnnpack"
 torch.set_num_threads(2)
@@ -199,18 +197,23 @@ with torch.no_grad():
                     outputs = model(input_tensor)
                     pred = torch.argmax(outputs, 1).item()
                     label = CLASSES[pred]
-
-                    if label == "compost":
-                        os.system("ssh robot@ev3dev.local 'python3 /home/robot/compost_action.py'")
-                    elif label == "recycling":
-                        os.system("ssh robot@ev3dev.local 'python3 /home/robot/recycling_action.py'")
-                    elif label == "trash":
-                        os.system("ssh robot@ev3dev.local 'python3 /home/robot/trash_action.py'")
+                    
+                    # Map the detailed class to one of 3 main categories
+                    category = CLASS_TO_CATEGORY[label]
+                    
+                    # Handle the 3-category sorting (replacing EV3 commands)
+                    print(f"Detected: {label} → Category: {category}")
+                    if category == "compost":
+                        sort_to_compost()
+                    elif category == "recyclable":
+                        sort_to_recyclable()
+                    elif category == "trash":
+                        sort_to_trash()
 
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(
                         display_frame,
-                        label,
+                        f"{label} → {category}",
                         (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.8,
@@ -222,10 +225,22 @@ with torch.no_grad():
                 outputs = model(input_tensor)
                 pred = torch.argmax(outputs, 1).item()
                 label = CLASSES[pred]
+                
+                # Map the detailed class to one of 3 main categories
+                category = CLASS_TO_CATEGORY[label]
+                
+                # Handle the 3-category sorting
+                print(f"Detected: {label} → Category: {category}")
+                if category == "compost":
+                    sort_to_compost()
+                elif category == "recyclable":
+                    sort_to_recyclable()
+                elif category == "trash":
+                    sort_to_trash()
 
                 cv2.putText(
                     display_frame,
-                    label,
+                    f"{label} → {category}",
                     (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1,
