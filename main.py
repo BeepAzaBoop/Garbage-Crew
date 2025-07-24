@@ -158,17 +158,17 @@ with torch.no_grad():
                 break
             display_frame = frame
 
-            # Motion detection
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            if prev_gray is None:
-                prev_gray = gray
-                continue
+            # # Motion detection
+            # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            # if prev_gray is None:
+            #     prev_gray = gray
+            #     continue
 
-            diff_frame = cv2.absdiff(prev_gray, gray)
-            prev_gray = gray
+            # diff_frame = cv2.absdiff(prev_gray, gray)
+            # prev_gray = gray
 
-            motion_score = np.sum(diff_frame)
-            motion_detected = motion_score > motion_threshold
+            # motion_score = np.sum(diff_frame)
+            # motion_detected = motion_score > motion_threshold
 
             # Auto-capture background in snapshot mode when no motion detected
             if snapshot_mode and not background_captured and not motion_detected:
