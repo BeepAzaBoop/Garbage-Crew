@@ -151,7 +151,6 @@ with torch.no_grad():
     results = None
 
     while True:
-        # Always read a new frame if not frozen
         if not frozen:
             ret, frame = cap.read()
             if not ret:
@@ -218,8 +217,7 @@ with torch.no_grad():
                 mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
                 
                 # Create masked frame for better classification
-                classification_frame = cv2.bitwise_and(display_frame, display_frame, mask=mask)
-                
+                classification_frame = display_frame
             if use_yolo:
                 if frame_count % 3 == 0:
                     results = yolo_model(classification_frame, imgsz=480)[0]
@@ -290,10 +288,13 @@ with torch.no_grad():
         # FPS calculation
         frame_count += 1
         current_time = time.time()
-        if current_time - last_fps_time >= 1.0:
-            fps = frame_count / (current_time - last_fps_time)
-            last_fps_time = current_time
+        if snapshot_mode and frozen:
             frame_count = 0
+        elif not snapshot_mode and not frozen:
+            if current_time - last_fps_time >= 1.0:
+                fps = frame_count / (current_time - last_fps_time)
+                last_fps_time = current_time
+                frame_count = 0
 
         # Draw FPS on frame
         cv2.putText(
