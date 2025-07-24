@@ -180,7 +180,6 @@ with torch.no_grad():
             if snapshot_mode and background_captured:
                 cv2.putText(
                     display_frame,
-                    "BG Sub: ON",
                     (10, 90),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
@@ -188,15 +187,15 @@ with torch.no_grad():
                     2,
                 )
 
-            cv2.putText(
-                display_frame,
-                f"Motion: {'Yes' if motion_detected else 'No'}",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 255),
-                2,
-            )
+            # cv2.putText(
+            #     display_frame,
+            #     f"Motion: {'Yes' if motion_detected else 'No'}",
+            #     (10, 60),
+            #     cv2.FONT_HERSHEY_SIMPLEX,
+            #     0.7,
+            #     (0, 255, 255),
+            #     2,
+            # )
 
 
         else:
