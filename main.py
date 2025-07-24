@@ -128,11 +128,16 @@ if not cap.isOpened():
 
 print("\nPress 'q' to quit.")
 if snapshot_mode:
-    print("Press 's' to take snapshot, 'r' to reset live view.\n")
+    print("Press 's' to take snapshot, 'r' to reset live view.")
+    print("Background subtraction enabled for snapshot mode.\n")
+else:
+    print("Running in live mode.\n")
 
 with torch.no_grad():
     frozen = False
     freeze_frame = None
+    background_frame = None  # For background subtraction
+    background_captured = False  # Flag to track if background is captured
 
     frame_count = 0
     last_fps_time = time.time()
@@ -165,6 +170,24 @@ with torch.no_grad():
             motion_score = np.sum(diff_frame)
             motion_detected = motion_score > motion_threshold
 
+            # Auto-capture background in snapshot mode when no motion detected
+            if snapshot_mode and not background_captured and not motion_detected:
+                background_frame = frame.copy()
+                background_captured = True
+                print("✓ Background automatically captured for subtraction")
+
+            # Display background subtraction status for snapshot mode
+            if snapshot_mode and background_captured:
+                cv2.putText(
+                    display_frame,
+                    "BG Sub: ON",
+                    (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 0, 255),
+                    2,
+                )
+
             cv2.putText(
                 display_frame,
                 f"Motion: {'Yes' if motion_detected else 'No'}",
@@ -181,14 +204,30 @@ with torch.no_grad():
 
         # Only run detection/classification if frozen (snapshot taken), or if not in snapshot mode
         if motion_detected and (not snapshot_mode or frozen):
+            # Use background subtracted frame for classification in snapshot mode if available
+            classification_frame = display_frame
+            if snapshot_mode and frozen and background_frame is not None:
+                # Apply background subtraction to isolate object
+                diff_bg = cv2.absdiff(cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY), 
+                                     cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY))
+                _, mask = cv2.threshold(diff_bg, 30, 255, cv2.THRESH_BINARY)
+                
+                # Clean up mask
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+                
+                # Create masked frame for better classification
+                classification_frame = cv2.bitwise_and(display_frame, display_frame, mask=mask)
+                
             if use_yolo:
                 if frame_count % 3 == 0:
-                    results = yolo_model(display_frame, imgsz=480)[0]
+                    results = yolo_model(classification_frame, imgsz=480)[0]
                     boxes = results.boxes.xyxy.cpu().numpy()
 
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box)
-                    obj_crop = display_frame[y1:y2, x1:x2]
+                    obj_crop = classification_frame[y1:y2, x1:x2]
 
                     if obj_crop.size == 0:
                         continue
@@ -221,7 +260,7 @@ with torch.no_grad():
                         2,
                     )
             else:
-                input_tensor = preprocess_cv2(display_frame).to(DEVICE)
+                input_tensor = preprocess_cv2(classification_frame).to(DEVICE)
                 outputs = model(input_tensor)
                 pred = torch.argmax(outputs, 1).item()
                 label = CLASSES[pred]
