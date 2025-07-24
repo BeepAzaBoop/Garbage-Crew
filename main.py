@@ -177,15 +177,16 @@ with torch.no_grad():
                 print("✓ Background automatically captured for subtraction")
 
             # Display background subtraction status for snapshot mode
-            if snapshot_mode and background_captured:
-                cv2.putText(
-                    display_frame,
-                    (10, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 0, 255),
-                    2,
-                )
+            # if snapshot_mode and background_captured:
+            #     cv2.putText(
+            #         display_frame,
+            #         "BG Sub: ON",
+            #         (10, 90),
+            #         cv2.FONT_HERSHEY_SIMPLEX,
+            #         0.7,
+            #         (255, 0, 255),
+            #         2,
+            #     )
 
             # cv2.putText(
             #     display_frame,
