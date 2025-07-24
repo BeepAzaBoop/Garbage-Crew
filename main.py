@@ -128,16 +128,11 @@ if not cap.isOpened():
 
 print("\nPress 'q' to quit.")
 if snapshot_mode:
-    print("Press 's' to take snapshot, 'r' to reset live view.")
-    print("Background subtraction enabled for snapshot mode.\n")
-else:
-    print("Running in live mode.\n")
+    print("Press 's' to take snapshot, 'r' to reset live view.\n")
 
 with torch.no_grad():
     frozen = False
     freeze_frame = None
-    background_frame = None  # For background subtraction
-    background_captured = False  # Flag to track if background is captured
 
     frame_count = 0
     last_fps_time = time.time()
@@ -151,41 +146,24 @@ with torch.no_grad():
     results = None
 
     while True:
+        # Always read a new frame if not frozen
         if not frozen:
             ret, frame = cap.read()
             if not ret:
                 break
             display_frame = frame
 
-            # # Motion detection
-            # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            # if prev_gray is None:
-            #     prev_gray = gray
-            #     continue
+            # Motion detection
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if prev_gray is None:
+                prev_gray = gray
+                continue
 
-            # diff_frame = cv2.absdiff(prev_gray, gray)
-            # prev_gray = gray
+            diff_frame = cv2.absdiff(prev_gray, gray)
+            prev_gray = gray
 
-            # motion_score = np.sum(diff_frame)
-            # motion_detected = motion_score > motion_threshold
-
-            # Auto-capture background in snapshot mode when no motion detected
-            if snapshot_mode and not background_captured and not motion_detected:
-                background_frame = frame.copy()
-                background_captured = True
-                print("✓ Background automatically captured for subtraction")
-
-            # Display background subtraction status for snapshot mode
-            # if snapshot_mode and background_captured:
-            #     cv2.putText(
-            #         display_frame,
-            #         "BG Sub: ON",
-            #         (10, 90),
-            #         cv2.FONT_HERSHEY_SIMPLEX,
-            #         0.7,
-            #         (255, 0, 255),
-            #         2,
-            #     )
+            motion_score = np.sum(diff_frame)
+            motion_detected = motion_score > motion_threshold
 
             # cv2.putText(
             #     display_frame,
@@ -203,29 +181,14 @@ with torch.no_grad():
 
         # Only run detection/classification if frozen (snapshot taken), or if not in snapshot mode
         if motion_detected and (not snapshot_mode or frozen):
-            # Use background subtracted frame for classification in snapshot mode if available
-            classification_frame = display_frame
-            if snapshot_mode and frozen and background_frame is not None:
-                # Apply background subtraction to isolate object
-                diff_bg = cv2.absdiff(cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY), 
-                                     cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY))
-                _, mask = cv2.threshold(diff_bg, 30, 255, cv2.THRESH_BINARY)
-                
-                # Clean up mask
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-                
-                # Create masked frame for better classification
-                classification_frame = display_frame
             if use_yolo:
                 if frame_count % 3 == 0:
-                    results = yolo_model(classification_frame, imgsz=480)[0]
+                    results = yolo_model(display_frame, imgsz=480)[0]
                     boxes = results.boxes.xyxy.cpu().numpy()
 
                 for box in boxes:
                     x1, y1, x2, y2 = map(int, box)
-                    obj_crop = classification_frame[y1:y2, x1:x2]
+                    obj_crop = display_frame[y1:y2, x1:x2]
 
                     if obj_crop.size == 0:
                         continue
@@ -258,7 +221,7 @@ with torch.no_grad():
                         2,
                     )
             else:
-                input_tensor = preprocess_cv2(classification_frame).to(DEVICE)
+                input_tensor = preprocess_cv2(display_frame).to(DEVICE)
                 outputs = model(input_tensor)
                 pred = torch.argmax(outputs, 1).item()
                 label = CLASSES[pred]
@@ -288,13 +251,10 @@ with torch.no_grad():
         # FPS calculation
         frame_count += 1
         current_time = time.time()
-        if snapshot_mode and frozen:
+        if current_time - last_fps_time >= 1.0:
+            fps = frame_count / (current_time - last_fps_time)
+            last_fps_time = current_time
             frame_count = 0
-        elif not snapshot_mode and not frozen:
-            if current_time - last_fps_time >= 1.0:
-                fps = frame_count / (current_time - last_fps_time)
-                last_fps_time = current_time
-                frame_count = 0
 
         # Draw FPS on frame
         cv2.putText(
