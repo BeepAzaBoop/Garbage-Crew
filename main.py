@@ -8,8 +8,12 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
+# --- Torch setup ---
 print(torch.__version__)
+torch.backends.quantized.engine = "qnnpack"
+torch.set_num_threads(2)
 
+# --- Argument parsing ---
 parser = argparse.ArgumentParser(description="Garbage Classifier")
 parser.add_argument("-q", "--quantized", action="store_true", help="Use quantized model")
 parser.add_argument("-y", "--yolo", action="store_true", help="Enable YOLO detection")
@@ -22,6 +26,7 @@ use_yolo = args.yolo
 snapshot_mode = args.snapshot
 use_pretrained = args.pretrained
 
+# --- Class labels and mapping ---
 IMG_SIZE = 224
 CLASSES = [
     "battery", "glass", "metal", "organic_waste",
@@ -39,9 +44,8 @@ CLASS_TO_CATEGORY = {
     "trash": "trash",
 }
 
+# --- Device and model loading ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.backends.quantized.engine = "qnnpack"
-torch.set_num_threads(2)
 
 if use_quantized:
     if use_pretrained:
@@ -56,7 +60,7 @@ else:
         model.classifier[3] = nn.Linear(1280, len(CLASSES))
     else:
         model = torch.load(
-           "./models/mobilenetv3_garbage_classifier.pt",
+            "./models/mobilenetv3_garbage_classifier.pt",
             map_location=DEVICE,
             weights_only=False,
         )
@@ -66,10 +70,12 @@ model = torch.jit.optimize_for_inference(model)
 model.to(DEVICE)
 model.eval()
 
+# --- Optional YOLO model (not used in logic) ---
 if use_yolo:
     from ultralytics import YOLO
     yolo_model = YOLO("./models/yolo11n.pt")
 
+# --- Preprocessing function ---
 def preprocess_cv2(image_bgr):
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     image_resized = cv2.resize(image_rgb, (224, 224))
@@ -81,6 +87,7 @@ def preprocess_cv2(image_bgr):
     )(image_tensor)
     return image_tensor.unsqueeze(0)
 
+# --- Overlay function ---
 def draw_text_with_background(img, text, org, font, scale, text_color, bg_color, alpha=0.45, thickness=2, padding=5):
     text_size, _ = cv2.getTextSize(text, font, scale, thickness)
     x, y = org
@@ -93,6 +100,7 @@ def draw_text_with_background(img, text, org, font, scale, text_color, bg_color,
     cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0, img)
     cv2.putText(img, text, org, font, scale, text_color, thickness, cv2.LINE_AA)
 
+# --- Webcam Setup ---
 cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 600)
@@ -102,28 +110,34 @@ cap.set(cv2.CAP_PROP_FPS, 36)
 if not cap.isOpened():
     raise IOError("Webcam not accessible")
 
+# --- Background Subtractor ---
+bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=50, detectShadows=False)
+
+# --- Runtime State ---
 print("\nPress 'q' to quit.")
 if snapshot_mode:
     print("Press 's' to take snapshot, 'r' to reset live view.\n")
 
+classified = False
+frozen = False
+freeze_frame = None
+frame_count = 0
+fps = 0.0
+last_fps_time = time.time()
+
+# --- Main loop ---
 with torch.no_grad():
-    frozen = False
-    freeze_frame = None
-
-    frame_count = 0
-    last_fps_time = time.time()
-    fps = 0.0
-
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        if frozen:
-            display_frame = freeze_frame.copy()
-        else:
-            display_frame = frame.copy()
+        # Background subtraction
+        fg_mask = bg_subtractor.apply(frame)
+        fg_mask = cv2.medianBlur(fg_mask, 5)
+        foreground = cv2.bitwise_and(frame, frame, mask=fg_mask)
 
+        # Track FPS
         current_time = time.time()
         frame_count += 1
         if current_time - last_fps_time >= 1.0:
@@ -131,7 +145,26 @@ with torch.no_grad():
             frame_count = 0
             last_fps_time = current_time
 
+        if frozen:
+            display_frame = freeze_frame.copy()
+        else:
+            display_frame = foreground.copy()
+            freeze_frame = foreground.copy()
 
+        # Warm-up indicator
+        if frame_count < 50:
+            draw_text_with_background(
+                display_frame,
+                text="Warming up background model...",
+                org=(10, 60),
+                font=cv2.FONT_HERSHEY_SIMPLEX,
+                scale=0.7,
+                text_color=(0, 0, 0),
+                bg_color=(255, 255, 255),
+                alpha=0.5
+            )
+
+        # --- Classification logic ---
         if frozen and snapshot_mode and not classified:
             input_tensor = preprocess_cv2(freeze_frame).to(DEVICE)
             outputs = model(input_tensor)
@@ -149,15 +182,16 @@ with torch.no_grad():
 
             result_text = f"{label} - {category}"
             classified = True
-        elif frozen and snapshot_mode and classified:
+
+        if frozen and snapshot_mode and classified:
             draw_text_with_background(
                 display_frame,
                 text=result_text,
-                org=(10, 32),              # position with padding
+                org=(10, 32),
                 font=cv2.FONT_HERSHEY_SIMPLEX,
                 scale=1.0,
-                text_color=(255, 255, 255),  # white text
-                bg_color=(0, 0, 0),           # black translucent background
+                text_color=(255, 255, 255),
+                bg_color=(0, 0, 0),
                 thickness=2
             )
 
@@ -167,22 +201,33 @@ with torch.no_grad():
             org=(10, display_frame.shape[0] - 10),
             font=cv2.FONT_HERSHEY_SIMPLEX,
             scale=0.8,
-            text_color=(255, 255, 255),  # white text
-            bg_color=(0, 0, 0),           # black translucent background
+            text_color=(255, 255, 255),
+            bg_color=(0, 0, 0),
             alpha=0.3
         )
+
+        if snapshot_mode:
+            draw_text_with_background(
+                display_frame,
+                text="s: Snap | r: Reset | q: Quit",
+                org=(10, 90),
+                font=cv2.FONT_HERSHEY_SIMPLEX,
+                scale=0.6,
+                text_color=(255, 255, 255),
+                bg_color=(50, 50, 50),
+                alpha=0.4
+            )
 
         cv2.imshow("Garbage Classifier", display_frame)
         key = cv2.waitKey(1)
 
+        # Snapshot mode controls
         if snapshot_mode:
             if key == ord("s") and not frozen:
-                freeze_frame = frame.copy()
                 frozen = True
-                classified = False  # allow classification again
+                classified = False
             elif key == ord("r") and frozen:
                 frozen = False
-                freeze_frame = None
                 classified = False
 
         if key == ord("q"):
