@@ -1,6 +1,7 @@
 from gpiozero import AngularServo
 from gpiozero.pins.pigpio import PiGPIOFactory
 from subprocess import run, CalledProcessError
+# import gpiozero from requirements.txt
 import time
 
 def start_pigpiod():
