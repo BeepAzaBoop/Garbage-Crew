@@ -152,7 +152,7 @@ with torch.no_grad():
             freeze_frame = foreground.copy()
 
         # Warm-up indicator
-        if frame_count < 50:
+        if frame_count < 16:
             draw_text_with_background(
                 display_frame,
                 text="Warming up background model...",
