@@ -1,47 +1,38 @@
 from gpiozero import AngularServo
 from gpiozero.pins.pigpio import PiGPIOFactory
-from subprocess import Popen, PIPE, CalledProcessError
+from subprocess import run, CalledProcessError
 import time
-from time import sleep
+
 def start_pigpiod():
     try:
-        p = Popen(["sudo", "pigpiod"], stdout=PIPE, stderr=PIPE, shell = True)
-        out, err = p.communicate(timeout = 2)
-        if b"already running" in err:
-            print("pigpiod is already running")
-        else: print("pigpiod started successfully")
-    except CalledProcessError as e:
-        print(f"Error starting pigpiod: {e}")
-    except TimeoutError:
-        print("Timeout while starting pigpiod")
+        result = run("sudo pigpiod", shell=True, capture_output=True, timeout=2)
+        if b"already running" in result.stderr:
+            print("pigpiod already running")
+        else:
+            print("Started pigpiod")
+    except (CalledProcessError, TimeoutError):
+        print("Failed to start pigpiod")
 
 start_pigpiod()
 time.sleep(0.5)
 
 factory = PiGPIOFactory()
-servo = AngularServo(14, min_angle= -90, max_angle=90, pin_factory=factory)
+servo = AngularServo(14, pin_factory=factory, min_angle=0, max_angle=360)
+servo.angle = 360
 
-# servo motor control functions
-def sort_to_compost():
+def move_servo(angle, delay):
     try:
-        servo.angle = 60
-        time.sleep(3.0) 
-        servo.angle = 0   
+        servo.angle = angle
+        time.sleep(delay)
+        servo.angle = 360
     except Exception as e:
-        print(f"Error controlling servo for compost: {e}")
+        print(f"Servo error: {e}")
+
+def sort_to_compost():
+    move_servo(90, 1.5)
 
 def sort_to_recyclable():
-    try:
-        servo.angle = 60
-        time.sleep(2.0)
-        servo.angle = 0
-    except Exception as e:
-        print(f"Error controlling servo for recyclable: {e}")
+    move_servo(90, 1.0)
 
 def sort_to_trash():
-    try:
-        servo.angle = 60
-        time.sleep(1.0)
-        servo.angle = 0
-    except Exception as e:
-        print(f"Error controlling servo for trash: {e}")
+    move_servo(90, 0.5)
