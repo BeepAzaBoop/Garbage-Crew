@@ -13,5 +13,4 @@ torch==2.7.1
 torchvision==0.22.1
 tqdm==4.67.1
 ultralytics==8.3.167
-pybluez== 0.42.0
 gpiozero==1.6.2
