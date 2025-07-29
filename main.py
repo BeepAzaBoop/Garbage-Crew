@@ -29,7 +29,7 @@ CLASSES = [
 ]
 
 CLASS_TO_CATEGORY = {
-    "battery": "trash",
+    "battery": "recyclable",
     "glass": "trash",
     "metal": "recyclable",
     "organic_waste": "compost",
