@@ -147,7 +147,7 @@ with torch.no_grad():
             elif category == "trash":
                 sort_to_trash()
 
-            result_text = f"{label} - {category}"
+            result_text = f"{category}"
             classified = True
         elif frozen and snapshot_mode and classified:
             draw_text_with_background(
