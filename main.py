@@ -139,7 +139,7 @@ with torch.no_grad():
             label = CLASSES[pred]
             category = CLASS_TO_CATEGORY[label]
 
-            print(f"Detected: {label} - Category: {category}")
+            print(f"Category: {category}")
             if category == "compost":
                 sort_to_compost()
             elif category == "recyclable":
