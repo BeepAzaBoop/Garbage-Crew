@@ -100,5 +100,5 @@ cd Garbage-Crew
 3. Run the garbage classifier:
 
 ```bash
-python garbage_classifier.py [--quantized] [--yolo] [--snapshot] [--pretrained]
+python main.py [-q] [-y] [-s] [-p]
 ```
